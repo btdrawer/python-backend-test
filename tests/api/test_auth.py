@@ -3,6 +3,8 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 import logging
+from contextlib import contextmanager
+from typing import Generator, Callable
 
 from app.models.user import User
 from app.main import app
@@ -11,114 +13,108 @@ from app.api import deps
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-def test_register_user(client: TestClient, db: Session) -> None:
-    response = client.post(
-        "/api/v1/auth/register",
-        json={
-            "username": "newuser",
-            "email": "newuser@example.com",
-            "password": "newpassword123"
-        }
-    )
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data["username"] == "newuser"
-    assert data["email"] == "newuser@example.com"
-    assert "password" not in data
-    assert "hashed_password" not in data
+@contextmanager
+def override_get_db(db: Session) -> Generator[None, None, None]:
+    """Context manager to override the get_db dependency with a test session"""
+    def _override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+    
+    app.dependency_overrides[deps.get_db] = _override_get_db
+    try:
+        yield
+    finally:
+        app.dependency_overrides.clear()
 
-    # Verify user was created in database
-    user = db.query(User).filter(User.username == "newuser").first()
-    assert user is not None
-    assert user.email == "newuser@example.com"
-    assert user.verify_password("newpassword123")
+def verify_test_user(db: Session, test_user: User) -> None:
+    """Verify that the test user exists in the database and matches the fixture"""
+    logger.debug("Verifying test user exists in database")
+    db_user = db.query(User).filter(User.username == "testuser").first()
+    assert db_user is not None, "Test user should exist in database"
+    assert db_user.id == test_user.id, "Should be the same user created by fixture"
+    return db_user
+
+def test_register_user(client: TestClient, db: Session) -> None:
+    """Test user registration"""
+    logger.debug("Starting test_register_user")
+    
+    with override_get_db(db):
+        logger.debug("Attempting to register new user")
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "newuser",
+                "email": "newuser@example.com",
+                "password": "newpassword123"
+            }
+        )
+        logger.debug(f"Register response status: {response.status_code}")
+        logger.debug(f"Register response body: {response.text}")
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["username"] == "newuser"
+        assert data["email"] == "newuser@example.com"
+        assert "password" not in data
+        assert "hashed_password" not in data
+
+        # Verify user was created in database
+        logger.debug("Verifying user in database")
+        user = db.query(User).filter(User.username == "newuser").first()
+        assert user is not None, "User should exist in database"
+        assert user.email == "newuser@example.com"
+        assert user.verify_password("newpassword123")
+        logger.debug("test_register_user completed successfully")
 
 def test_register_existing_username(client: TestClient, db: Session, test_user: User) -> None:
+    """Test registration with existing username"""
     logger.debug("Starting test_register_existing_username")
-    try:
-        # First verify the test user exists
-        logger.debug("Verifying test user exists")
-        existing_user = db.query(User).filter(User.username == "testuser").first()
-        assert existing_user is not None, "Test user should exist in database"
-        assert existing_user.id == test_user.id, "Should be the same user created by fixture"
+    
+    # First verify the test user exists
+    verify_test_user(db, test_user)
 
-        # Now try to register with the same username
+    with override_get_db(db):
         logger.debug("Attempting to register with existing username")
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "testuser",  # Already exists
+                "email": "different@example.com",
+                "password": "password123"
+            }
+        )
+        logger.debug(f"Register response status: {response.status_code}")
+        logger.debug(f"Register response body: {response.text}")
         
-        # Override the get_db dependency to use our test session
-        def override_get_db():
-            try:
-                yield db
-            finally:
-                pass  # Don't close the session, it's managed by the fixture
-        
-        app.dependency_overrides[deps.get_db] = override_get_db
-        
-        try:
-            response = client.post(
-                "/api/v1/auth/register",
-                json={
-                    "username": "testuser",  # Already exists
-                    "email": "different@example.com",
-                    "password": "password123"
-                }
-            )
-            logger.debug(f"Response status: {response.status_code}")
-            logger.debug(f"Response body: {response.text}")
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
-            assert "username already exists" in response.json()["detail"].lower()
-        finally:
-            # Clear the override
-            app.dependency_overrides.clear()
-        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "username already exists" in response.json()["detail"].lower()
         logger.debug("test_register_existing_username completed successfully")
-    except Exception as e:
-        logger.error(f"Error in test_register_existing_username: {str(e)}")
-        raise
 
 def test_register_existing_email(client: TestClient, db: Session, test_user: User) -> None:
+    """Test registration with existing email"""
     logger.debug("Starting test_register_existing_email")
-    try:
-        # First verify the test user exists
-        logger.debug("Verifying test user exists")
-        existing_user = db.query(User).filter(User.email == "test@example.com").first()
-        logger.debug(f"Existing user: {existing_user}")
-        assert existing_user is not None, "Test user should exist in database"
-        assert existing_user.id == test_user.id, "Should be the same user created by fixture"
-        
-        # Now try to register with the same email
+    
+    # First verify the test user exists
+    verify_test_user(db, test_user)
+
+    with override_get_db(db):
         logger.debug("Attempting to register with existing email")
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "different",
+                "email": "test@example.com",  # Already exists
+                "password": "password123"
+            }
+        )
+        logger.debug(f"Register response status: {response.status_code}")
+        logger.debug(f"Register response body: {response.text}")
         
-        # Override the get_db dependency to use our test session
-        def override_get_db():
-            try:
-                yield db
-            finally:
-                pass  # Don't close the session, it's managed by the fixture
-        
-        app.dependency_overrides[deps.get_db] = override_get_db
-        
-        try:
-            response = client.post(
-                "/api/v1/auth/register",
-                json={
-                    "username": "different",
-                    "email": "test@example.com",  # Already exists
-                    "password": "password123"
-                }
-            )
-            logger.debug(f"Response status: {response.status_code}")
-            logger.debug(f"Response body: {response.text}")
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
-            assert "email already exists" in response.json()["detail"].lower()
-        finally:
-            # Clear the override
-            app.dependency_overrides.clear()
-        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "email already exists" in response.json()["detail"].lower()
         logger.debug("test_register_existing_email completed successfully")
-    except Exception as e:
-        logger.error(f"Error in test_register_existing_email: {str(e)}")
-        raise
 
 def test_register_invalid_email(client: TestClient) -> None:
     response = client.post(
@@ -142,52 +138,101 @@ def test_register_short_password(client: TestClient) -> None:
     )
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
-def test_login_success(client: TestClient, test_user: User) -> None:
-    response = client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "testuser",
-            "password": "testpassword123"
-        }
-    )
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert "access_token" in data
-    assert data["token_type"] == "bearer"
+def test_login_success(client: TestClient, db: Session, test_user: User) -> None:
+    """Test successful login with test user"""
+    logger.debug("Starting test_login_success")
+    
+    # Verify test user exists in database
+    verify_test_user(db, test_user)
+    
+    with override_get_db(db):
+        logger.debug("Attempting login")
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "testuser",
+                "password": "testpassword123"
+            }
+        )
+        logger.debug(f"Login response status: {response.status_code}")
+        logger.debug(f"Login response body: {response.text}")
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "access_token" in data
+        assert data["token_type"] == "bearer"
+        logger.debug("test_login_success completed successfully")
 
-def test_login_wrong_password(client: TestClient, test_user: User) -> None:
-    response = client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "testuser",
-            "password": "wrongpassword"
-        }
-    )
-    assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "incorrect username or password" in response.json()["detail"].lower()
+def test_login_wrong_password(client: TestClient, db: Session, test_user: User) -> None:
+    """Test login with incorrect password"""
+    logger.debug("Starting test_login_wrong_password")
+    
+    # Verify test user exists
+    verify_test_user(db, test_user)
 
-def test_login_nonexistent_user(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "nonexistent",
-            "password": "password123"
-        }
-    )
-    assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "incorrect username or password" in response.json()["detail"].lower()
+    with override_get_db(db):
+        logger.debug("Attempting login with wrong password")
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "testuser",
+                "password": "wrongpassword"
+            }
+        )
+        logger.debug(f"Login response status: {response.status_code}")
+        logger.debug(f"Login response body: {response.text}")
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "incorrect username or password" in response.json()["detail"].lower()
+        logger.debug("test_login_wrong_password completed successfully")
+
+def test_login_nonexistent_user(client: TestClient, db: Session) -> None:
+    """Test login with non-existent user"""
+    logger.debug("Starting test_login_nonexistent_user")
+    
+    with override_get_db(db):
+        logger.debug("Attempting login with non-existent user")
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "nonexistent",
+                "password": "password123"
+            }
+        )
+        logger.debug(f"Login response status: {response.status_code}")
+        logger.debug(f"Login response body: {response.text}")
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "incorrect username or password" in response.json()["detail"].lower()
+        logger.debug("test_login_nonexistent_user completed successfully")
 
 def test_login_inactive_user(client: TestClient, db: Session, test_user: User) -> None:
-    # Deactivate the test user
-    test_user.is_active = False
-    db.commit()
+    """Test login with inactive user"""
+    logger.debug("Starting test_login_inactive_user")
     
-    response = client.post(
-        "/api/v1/auth/login",
-        data={
-            "username": "testuser",
-            "password": "testpassword123"
-        }
-    )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "inactive user" in response.json()["detail"].lower() 
+    # Verify test user exists and is active
+    db_user = verify_test_user(db, test_user)
+    assert db_user.is_active, "Test user should be active initially"
+    
+    # Deactivate the test user
+    logger.debug("Deactivating test user")
+    db_user.is_active = False
+    db.commit()
+    db.refresh(db_user)
+    assert not db_user.is_active, "Test user should be inactive after update"
+
+    with override_get_db(db):
+        logger.debug("Attempting login with inactive user")
+        response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "testuser",
+                "password": "testpassword123"
+            }
+        )
+        logger.debug(f"Login response status: {response.status_code}")
+        logger.debug(f"Login response body: {response.text}")
+        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "inactive user" in response.json()["detail"].lower()
+        logger.debug("test_login_inactive_user completed successfully") 

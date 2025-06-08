@@ -1,3 +1,5 @@
+import logging
+logging.getLogger(__name__).debug("[IMPORT] app.api.v1.endpoints.users imported")
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -9,6 +11,7 @@ from app.schemas.user import User, UserCreate, UserUpdate
 
 router = APIRouter()
 
+@router.get("", response_model=List[User])
 @router.get("/", response_model=List[User])
 def read_users(
     db: Session = Depends(deps.get_db),
@@ -22,6 +25,7 @@ def read_users(
     users = crud_user.get_users(db, skip=skip, limit=limit)
     return users
 
+@router.post("", response_model=User)
 @router.post("/", response_model=User)
 def create_user(
     *,

@@ -1,8 +1,11 @@
+import logging
 from typing import Optional, List
 from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
+
+logger = logging.getLogger(__name__)
 
 def get_user(db: Session, user_id: int) -> Optional[User]:
     return db.query(User).filter(User.id == user_id).first()
@@ -52,7 +55,18 @@ def delete_user(db: Session, user_id: int) -> Optional[User]:
     return db_user
 
 def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    """Authenticate a user by username and password"""
+    logger.debug(f"Attempting to authenticate user: {username}")
+    
     user = get_user_by_username(db, username)
-    if not user or not user.verify_password(password):
+    if not user:
+        logger.debug(f"User not found: {username}")
         return None
+        
+    logger.debug(f"User found, verifying password for user: {username}")
+    if not user.verify_password(password):
+        logger.debug(f"Password verification failed for user: {username}")
+        return None
+        
+    logger.debug(f"Successfully authenticated user: {username}")
     return user 

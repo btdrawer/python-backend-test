@@ -11,6 +11,7 @@ import requests
 from contextlib import contextmanager
 import os
 import logging
+from testcontainers.postgres import PostgresContainer
 
 from app.main import app
 from app.db.session import Base, get_db
@@ -21,23 +22,51 @@ from app.core import security
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Override environment variables for testing
-os.environ.update({
-    "POSTGRES_SERVER": "127.0.0.1",
-    "POSTGRES_PORT": "5433",
-    "POSTGRES_USER": "postgres",
-    "POSTGRES_PASSWORD": "postgres",
-    "POSTGRES_DB": "app_test",
-    "ENCRYPTION_KEY": "test-key-123"  # Add a test encryption key
-})
+@pytest.fixture(scope="session")
+def postgres_container():
+    """Create a PostgreSQL container for testing"""
+    logger.debug("Starting postgres container")
+    container = PostgresContainer(
+        image="postgres:15",
+        username="postgres",
+        password="postgres",
+        dbname="app_test",
+        port=5432  # Use default postgres port internally
+    )
+    container.start()
+    logger.debug("Postgres container started")
+    
+    # Get the actual exposed port from the container
+    exposed_port = container.get_exposed_port(5432)
+    logger.debug(f"Container exposed port: {exposed_port}")
+    
+    # Update environment variables for the test database
+    os.environ.update({
+        "POSTGRES_SERVER": container.get_container_host_ip(),
+        "POSTGRES_PORT": str(exposed_port),
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "postgres",
+        "POSTGRES_DB": "app_test",
+        "ENCRYPTION_KEY": "test-key-123"
+    })
+    
+    # Create new settings instance with test values
+    test_settings = Settings()
+    # Override the global settings
+    for key, value in test_settings.dict().items():
+        setattr(settings, key, value)
+    
+    # Log the database URL for debugging
+    logger.debug(f"Database URL: {settings.DATABASE_URL}")
+    
+    try:
+        yield container
+    finally:
+        logger.debug("Stopping postgres container")
+        container.stop()
+        logger.debug("Postgres container stopped")
 
-# Create new settings instance with test values
-test_settings = Settings()
-# Override the global settings
-for key, value in test_settings.dict().items():
-    setattr(settings, key, value)
-
-def wait_for_db(max_retries=10, retry_interval=2):
+def wait_for_db(max_retries=30, retry_interval=1):  # Increased retries and decreased interval
     """Wait for database to become available and ready"""
     logger.debug("Starting wait_for_db")
     for i in range(max_retries):
@@ -102,7 +131,7 @@ def run_server():
         pass
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_test_environment():
+def setup_test_environment(postgres_container):
     """Ensure test environment (database and server) is running before any tests"""
     logger.debug("Starting setup_test_environment")
     try:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.user import User
 
 def test_read_users(test_user_client: TestClient, test_user: User) -> None:
-    response = test_user_client.get("/api/v1/users/")
+    response = test_user_client.get("/api/v1/users")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert len(data) == 1

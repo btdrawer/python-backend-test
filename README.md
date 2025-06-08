@@ -1,6 +1,6 @@
 # FastAPI Backend Service
 
-A modern Python backend service built with FastAPI.
+Learning to build a Python backend using Cursor. (So far, the vast majority of this code is AI-generated.)
 
 ## Setup
 
