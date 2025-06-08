@@ -14,6 +14,7 @@ import logging
 from testcontainers.postgres import PostgresContainer
 
 from app.main import app
+from app.api.v1 import api as api_v1
 from app.db.session import Base, get_db
 from app.core.config import Settings, settings
 from app.models.user import User
@@ -21,6 +22,11 @@ from app.core import security
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+import importlib
+importlib.reload(api_v1)
+
+logger.debug("(Test) app/api/v1/api.py is imported (or reimported)")
 
 @pytest.fixture(scope="session")
 def postgres_container():
